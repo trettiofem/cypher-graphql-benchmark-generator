@@ -1,0 +1,19 @@
+services:
+  neo4j:
+    image: neo4j:latest
+    container_name: neo4j-server
+    ports:
+      - "7474:7474" # HTTP
+      - "7687:7687" # Bolt (Binary protocol for drivers)
+    volumes:
+      - ./neo4j/data:/data
+      - ./neo4j/logs:/logs
+      - ./neo4j/import:/var/lib/neo4j/import
+      - ./neo4j/plugins:/plugins
+    environment:
+      # Set the password for the 'neo4j' user
+      - NEO4J_AUTH=neo4j/password
+      # Allow APOC and other plugins to access internal procedures
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+      - NEO4J_dbms_security_procedures_allowlist=apoc.*
+    restart: "no"
