@@ -6,20 +6,49 @@ import { generateRandomQuery } from "ibm-graphql-query-generator";
 import { print as printGraphQL } from "graphql";
 import { GraphQLSchema } from "graphql";
 import GRAPHQL_SCHEMA from "./schema.graphql" with { type: "text" };
+import { assert } from "node:console";
 
-const NBR_OF_QUERIES = 1;
-const DEPTH_PROBABILITY = 0.8;
-const BREADTH_PROBABILITY = 0.1;
-const MAX_DEPTH = 25;
+const STAGES = [
+  {
+    name: "Mini",
+    nbrOfQueries: 300,
+    depthProbability: 0.1,
+    breadthProbability: 0.1,
+    maxDepth: 2,
+  },
+  {
+    name: "Small",
+    nbrOfQueries: 300,
+    depthProbability: 0.1,
+    breadthProbability: 0.1,
+    maxDepth: 10,
+  },
+  {
+    name: "Medium",
+    nbrOfQueries: 300,
+    depthProbability: 0.5,
+    breadthProbability: 0.15,
+    maxDepth: 20,
+  },
+  {
+    name: "Large",
+    nbrOfQueries: 100,
+    depthProbability: 0.9,
+    breadthProbability: 0.15,
+    maxDepth: 30,
+  },
+];
 
 const NEO4J_URI = "neo4j://localhost:7687";
 const NEO4J_USERNAME = "neo4j";
 const NEO4J_PASSWORD = "password";
-
 const APOLLO_PORT = 4067;
+const OUTPUT_FILE = "queries_{}.txt";
+
+const queries: string[] = [];
 
 async function startServer(
-  onQuery: (query: string, params: object, unknown: object) => void,
+  onQuery: (query: string) => void,
 ): Promise<[string, GraphQLSchema, () => Promise<void>]> {
   const logRegex = /RUN ([^]*) ({[^]*}) ({})/m;
 
@@ -34,8 +63,7 @@ async function startServer(
             const match = logRegex.exec(message);
 
             if (match) {
-              const [query, params, unknown] = [match[1], match[2], match[3]];
-              onQuery(query, JSON.parse(params), JSON.parse(unknown));
+              onQuery(match[1]);
             }
           }
         },
@@ -62,49 +90,56 @@ async function startServer(
     async () => {
       await server.stop();
       await driver.close();
+      console.log("👋 Goodbye!");
     },
   ];
 }
 
 async function main() {
-  const onQuery = (query: string, params: object, unknown: object) => {
+  const onQuery = (query: string) => {
     if (query.startsWith("CYPHER 5\nCALL dbms.components()")) return;
-
-    console.log("--- onQuery() ---");
-    console.log(query);
-    console.log(JSON.stringify(params));
-    console.log(JSON.stringify(unknown) + "\n");
+    queries.push(query);
   };
 
   const [url, schema, shutdown] = await startServer(onQuery);
 
-  for (let i = 0; i < NBR_OF_QUERIES; i++) {
-    const { queryDocument, variableValues } = generateRandomQuery(schema, {
-      depthProbability: DEPTH_PROBABILITY,
-      breadthProbability: BREADTH_PROBABILITY,
-      maxDepth: MAX_DEPTH,
-      providePlaceholders: true,
-    });
+  for (const stage of STAGES) {
+    for (let i = 0; i < stage.nbrOfQueries; i++) {
+      try {
+        console.log(`[${stage.name}] Query ${i + 1}/${stage.nbrOfQueries}`);
 
-    console.log(`--- Request ${i + 1} of ${NBR_OF_QUERIES} ---`);
-    console.log(printGraphQL(queryDocument));
-    console.log(JSON.stringify(variableValues) + "\n");
+        const { queryDocument, variableValues } = generateRandomQuery(schema, {
+          depthProbability: stage.depthProbability,
+          breadthProbability: stage.breadthProbability,
+          maxDepth: stage.maxDepth,
+          providePlaceholders: true,
+        });
 
-    const res = await fetch(url, {
-      body: JSON.stringify({
-        operationName: "RandomQuery",
-        query: printGraphQL(queryDocument),
-        variables: variableValues,
-      }),
-      headers: {
-        "Content-Type": "application/json",
-      },
-      method: "POST",
-    });
+        assert(Object.keys(variableValues).length === 0, "Variables generated");
 
-    console.log(`--- Response from request ${i + 1} of ${NBR_OF_QUERIES} ---`);
-    const resBody = await res.text();
-    console.log(resBody + "\n");
+        await fetch(url, {
+          body: JSON.stringify({
+            operationName: "RandomQuery",
+            query: printGraphQL(queryDocument),
+            variables: variableValues,
+          }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        });
+      } catch (_) {
+        console.error("Error occured, trying again.");
+        i--;
+      }
+    }
+
+    const stageOutputFile = OUTPUT_FILE.replace("{}", stage.name.toLowerCase());
+
+    await Deno.writeTextFile(stageOutputFile, queries.join(";\n"));
+    console.log(`💾 Queries written to ${stageOutputFile}`);
+
+    queries.length = 0; // Clear the queries array for the next stage
   }
 
   await shutdown();

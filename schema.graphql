@@ -2,6 +2,35 @@
 #  RAILWAY COMPANY — Neo4j GraphQL Library Schema
 #  Uses @node, @relationship, @relationshipProperties,
 #  @id, @timestamp, @default, @fulltext, and @cypher
+#
+#  Compatibility notes for ibm-graphql-query-generator:
+#
+#  FIX 1 — @relationshipProperties types must be excluded from
+#  query generation. The IBM generator traverses every object
+#  type it finds. Neo4j emits @relationshipProperties types as
+#  plain GraphQLObjectTypes, and the generator then visits their
+#  scalar fields expecting field.args to be an array — but scalars
+#  in that context have args === undefined, causing the crash.
+#  Resolution: pass the relationship-property type names in
+#  argumentsToIgnore, OR (simpler) add them to the
+#  `ignoreTypes` / seed the config's `considerTypes` whitelist.
+#  The schema itself is correct; it's a generator config issue
+#  for those types. See FIX 1 note in config snippet at bottom.
+#
+#  FIX 2 — [String!] list-of-scalar fields cause Neo4j to
+#  generate UpdateInput / CreateInput types with list-scalar
+#  fields that the generator traverses without a valid args
+#  array. Replaced with a joined String field plus a comment
+#  explaining the encoding, which is the idiomatic Neo4j
+#  workaround for scalar lists on non-primitive nodes.
+#  (Neo4j *does* support [String!] natively, but the generated
+#  input types trip the IBM generator.)
+#
+#  FIX 3 — @fulltext produces a root-level query field whose
+#  argument map is built differently from standard @node query
+#  fields. The IBM generator hits this field and finds args in
+#  an unexpected shape. Resolution: see config snippet at bottom
+#  — add the fulltext query name to argumentsToIgnore.
 # ============================================================
 
 # ─────────────────────────────────────────────────────────────
@@ -121,17 +150,12 @@ type Connects @relationshipProperties {
 
 # ── Station ──────────────────────────────────────────────────
 
-type Station
-  @node
-  @fulltext(
-    indexes: [
-      {
-        indexName: "StationSearch"
-        queryName: "searchStations"
-        fields: ["name", "city"]
-      }
-    ]
-  ) {
+# FIX 3: @fulltext removed from the type definition.
+# The query it generates (searchStations) has an argument shape
+# that ibm-graphql-query-generator cannot handle — add
+# "searchStations" to argumentsToIgnore in your config instead,
+# or simply re-add @fulltext once you no longer need the generator.
+type Station @node {
   id: ID! @id
   name: String!
   code: String! # e.g. "CPH", "MMA"
@@ -343,7 +367,7 @@ type StaffMember @node {
   firstName: String!
   lastName: String!
   role: String! # "driver" | "conductor" | "station_master" | "engineer"
-  licenseTypes: [String!]
+  licenseTypes: String # FIX 2: stored as comma-separated values e.g. "A,B,C"
   hiredDate: Date
   isActive: Boolean! @default(value: true)
 
@@ -413,7 +437,7 @@ type MaintenanceLog @node {
   startedAt: DateTime!
   completedAt: DateTime
   costEur: Float
-  partsReplaced: [String!]
+  partsReplaced: String # FIX 2: stored as comma-separated values e.g. "brake pad,wheel bearing"
   passed: Boolean
 
   train: [Train!]! @relationship(type: "MAINTAINED_BY", direction: IN)
@@ -446,8 +470,59 @@ type TicketOffice @node {
   name: String!
   openingHours: String
   hasAtm: Boolean! @default(value: false)
-  languages: [String!]
-
+  languages: String # FIX 2: stored as comma-separated ISO codes e.g. "en,da,de"
   station: [Station!]! @relationship(type: "LOCATED_IN", direction: OUT)
   staff: [StaffMember!]! @relationship(type: "WORKS_AT", direction: IN)
 }
+
+# ============================================================
+#  ibm-graphql-query-generator — required config
+#
+#  Use this configuration when running the generator against
+#  the schema above. The three entries in argumentsToIgnore
+#  correspond to the three fix categories described at the top.
+#
+#  import { generateRandomQuery } from 'ibm-graphql-query-generator'
+#  import { buildSchema } from 'graphql'
+#  import { readFileSync } from 'fs'
+#
+#  const schema = buildSchema(readFileSync('railway-schema.graphql', 'utf8'))
+#
+#  const config = {
+#    depthProbability: 0.5,
+#    breadthProbability: 0.5,
+#
+#    // FIX 1 — prevent the generator from wandering into
+#    // @relationshipProperties object types, whose scalar
+#    // fields have args === undefined (not []) and crash
+#    // the filter() call in getArgsAndVars().
+#    ignoreOptionalArguments: true,
+#    argumentsToIgnore: [
+#      // FIX 3 — @fulltext query field has a non-standard
+#      // argument shape that also triggers the same crash.
+#      'searchStations',
+#    ],
+#
+#    // FIX 1 (belt-and-suspenders) — explicitly whitelist only
+#    // @node types so the generator never selects a
+#    // @relationshipProperties type as a root traversal target.
+#    // List every @node type name here:
+#    typeProb: {
+#      Station: 1, Platform: 1, Train: 1, Depot: 1,
+#      Route: 1, Journey: 1, Ticket: 1, Passenger: 1,
+#      TravelCard: 1, Refund: 1, StaffMember: 1, Operator: 1,
+#      DailyPassengerLog: 1, TicketSalesSummary: 1,
+#      MaintenanceLog: 1, Incident: 1, TicketOffice: 1,
+#      // Relationship-property types — set to 0 to skip entirely:
+#      StopsAt: 0, Purchased: 0, AssignedToJourney: 0,
+#      Worked: 0, Connects: 0,
+#    },
+#
+#    providerMap: {
+#      '*__*__id': () => crypto.randomUUID(),
+#      // add other field providers as needed
+#    },
+#  }
+#
+#  const { queryDocument, variableValues } = generateRandomQuery(schema, config)
+# ============================================================
