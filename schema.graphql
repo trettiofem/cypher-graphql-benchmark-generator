@@ -1,0 +1,453 @@
+# ============================================================
+#  RAILWAY COMPANY — Neo4j GraphQL Library Schema
+#  Uses @node, @relationship, @relationshipProperties,
+#  @id, @timestamp, @default, @fulltext, and @cypher
+# ============================================================
+
+# ─────────────────────────────────────────────────────────────
+#  ENUMS
+# ─────────────────────────────────────────────────────────────
+
+enum TrainStatus {
+  ACTIVE
+  MAINTENANCE
+  DECOMMISSIONED
+  RESERVED
+}
+
+enum ServiceType {
+  EXPRESS
+  REGIONAL
+  INTERCITY
+  HIGH_SPEED
+  FREIGHT
+  NIGHT
+}
+
+enum TicketClass {
+  STANDARD
+  FIRST_CLASS
+  BUSINESS
+  SLEEPER
+}
+
+enum TicketStatus {
+  VALID
+  USED
+  CANCELLED
+  REFUNDED
+  EXPIRED
+}
+
+enum PaymentMethod {
+  CREDIT_CARD
+  DEBIT_CARD
+  CASH
+  MOBILE_PAY
+  TRAVEL_CARD
+  CORPORATE_ACCOUNT
+}
+
+enum DelayReason {
+  TECHNICAL_FAULT
+  WEATHER
+  SIGNAL_FAILURE
+  CONGESTION
+  PASSENGER_INCIDENT
+  INFRASTRUCTURE
+  OPERATIONAL
+}
+
+enum PlatformStatus {
+  OPEN
+  CLOSED
+  MAINTENANCE
+  RESTRICTED
+}
+
+# ─────────────────────────────────────────────────────────────
+#  RELATIONSHIP PROPERTIES
+# ─────────────────────────────────────────────────────────────
+
+"""
+Properties on the STOPS_AT relationship between a Route and a Station.
+"""
+type StopsAt @relationshipProperties {
+  stopOrder: Int!
+  scheduledArrival: String # "HH:MM"
+  scheduledDeparture: String # "HH:MM"
+  distanceFromOriginKm: Float
+  isOrigin: Boolean! @default(value: false)
+  isDestination: Boolean! @default(value: false)
+}
+
+"""
+Properties on the PURCHASED relationship between a Passenger and a Ticket.
+"""
+type Purchased @relationshipProperties {
+  purchasedAt: DateTime!
+  channelUsed: String # "app" | "kiosk" | "counter" | "online"
+}
+
+"""
+Properties on the ASSIGNED_TO relationship between a Train and a Journey.
+"""
+type AssignedToJourney @relationshipProperties {
+  assignedAt: DateTime!
+  assignedBy: String # staff ID
+}
+
+"""
+Properties on the WORKED relationship between a StaffMember and a Journey.
+"""
+type Worked @relationshipProperties {
+  role: String! # "driver" | "conductor" | "guard"
+  startTime: DateTime!
+  endTime: DateTime
+}
+
+"""
+Properties on the CONNECTS relationship between two Stations.
+"""
+type Connects @relationshipProperties {
+  distanceKm: Float!
+  averageTimeMin: Int!
+  lineCode: String!
+}
+
+# ─────────────────────────────────────────────────────────────
+#  NODES
+# ─────────────────────────────────────────────────────────────
+
+# ── Station ──────────────────────────────────────────────────
+
+type Station
+  @node
+  @fulltext(
+    indexes: [
+      {
+        indexName: "StationSearch"
+        queryName: "searchStations"
+        fields: ["name", "city"]
+      }
+    ]
+  ) {
+  id: ID! @id
+  name: String!
+  code: String! # e.g. "CPH", "MMA"
+  city: String!
+  country: String!
+  latitude: Float!
+  longitude: Float!
+  timezone: String!
+  isHub: Boolean! @default(value: false)
+  openedYear: Int
+  accessibilityRating: Int # 1–5
+  dailyCapacity: Int
+
+  # Relationships
+  platforms: [Platform!]! @relationship(type: "HAS_PLATFORM", direction: OUT)
+  routes: [Route!]!
+    @relationship(type: "STOPS_AT", direction: IN, properties: "StopsAt")
+  connectedTo: [Station!]!
+    @relationship(type: "CONNECTS", direction: OUT, properties: "Connects")
+  staffMembers: [StaffMember!]! @relationship(type: "BASED_AT", direction: IN)
+  passengerLogs: [DailyPassengerLog!]!
+    @relationship(type: "LOGGED_AT", direction: IN)
+  incidents: [Incident!]! @relationship(type: "OCCURRED_AT", direction: IN)
+  ticketOffices: [TicketOffice!]!
+    @relationship(type: "LOCATED_IN", direction: IN)
+}
+
+# ── Platform ──────────────────────────────────────────────────
+
+type Platform @node {
+  id: ID! @id
+  platformNumber: String!
+  status: PlatformStatus! @default(value: OPEN)
+  length: Float # metres
+  hasRoof: Boolean! @default(value: true)
+  accessibleForWheelchairs: Boolean! @default(value: false)
+
+  station: [Station!]! @relationship(type: "HAS_PLATFORM", direction: IN)
+  journeys: [Journey!]! @relationship(type: "DEPARTS_FROM", direction: IN)
+}
+
+# ── Train ──────────────────────────────────────────────────────
+
+type Train @node {
+  id: ID! @id
+  trainNumber: String!
+  model: String! # e.g. "Alstom Coradia", "ICE 4"
+  manufacturer: String
+  yearBuilt: Int
+  maxSpeedKmh: Int
+  totalSeats: Int!
+  firstClassSeats: Int
+  carriages: Int!
+  status: TrainStatus! @default(value: ACTIVE)
+  lastServiceDate: Date
+  nextServiceDate: Date
+
+  journeys: [Journey!]!
+    @relationship(
+      type: "ASSIGNED_TO"
+      direction: OUT
+      properties: "AssignedToJourney"
+    )
+  maintenanceLogs: [MaintenanceLog!]!
+    @relationship(type: "MAINTAINED_BY", direction: OUT)
+  depot: [Depot!]! @relationship(type: "HOUSED_AT", direction: OUT)
+}
+
+# ── Depot ──────────────────────────────────────────────────────
+
+type Depot @node {
+  id: ID! @id
+  name: String!
+  location: String!
+  capacity: Int!
+
+  trains: [Train!]! @relationship(type: "HOUSED_AT", direction: IN)
+}
+
+# ── Route ──────────────────────────────────────────────────────
+
+type Route @node {
+  id: ID! @id
+  routeCode: String! # e.g. "IC-42", "RE-7"
+  name: String!
+  serviceType: ServiceType!
+  originCode: String!
+  destinationCode: String!
+  totalDistanceKm: Float
+  estimatedDurationMin: Int
+  isActive: Boolean! @default(value: true)
+  seasonStart: Date
+  seasonEnd: Date
+
+  stations: [Station!]!
+    @relationship(type: "STOPS_AT", direction: OUT, properties: "StopsAt")
+  journeys: [Journey!]! @relationship(type: "RUNS_AS", direction: IN)
+  operator: [Operator!]! @relationship(type: "OPERATED_BY", direction: OUT)
+}
+
+# ── Journey ──────────────────────────────────────────────────
+# A Journey is a single real-world run of a Route on a specific date.
+
+type Journey @node {
+  id: ID! @id
+  journeyCode: String! # e.g. "IC-42-2024-06-15-08:00"
+  scheduledDeparture: DateTime!
+  scheduledArrival: DateTime!
+  actualDeparture: DateTime
+  actualArrival: DateTime
+  delayMinutes: Int @default(value: 0)
+  delayReason: DelayReason
+  cancelled: Boolean! @default(value: false)
+  occupancyPercent: Float
+
+  # Relationships
+  route: [Route!]! @relationship(type: "RUNS_AS", direction: OUT)
+  train: [Train!]!
+    @relationship(
+      type: "ASSIGNED_TO"
+      direction: IN
+      properties: "AssignedToJourney"
+    )
+  departsFromPlatform: [Platform!]!
+    @relationship(type: "DEPARTS_FROM", direction: OUT)
+  tickets: [Ticket!]! @relationship(type: "VALID_FOR", direction: IN)
+  crew: [StaffMember!]!
+    @relationship(type: "WORKED", direction: IN, properties: "Worked")
+  incidents: [Incident!]! @relationship(type: "HAPPENED_ON", direction: IN)
+}
+
+# ── Ticket ──────────────────────────────────────────────────
+
+type Ticket @node {
+  id: ID! @id
+  ticketNumber: String!
+  class: TicketClass!
+  status: TicketStatus! @default(value: VALID)
+  price: Float!
+  currency: String! @default(value: "EUR")
+  paymentMethod: PaymentMethod!
+  originStation: String!
+  destinationStation: String!
+  seatNumber: String
+  issuedAt: DateTime! @timestamp(operations: [CREATE])
+  validFrom: DateTime!
+  validUntil: DateTime!
+  isRoundTrip: Boolean! @default(value: false)
+  requiresReservation: Boolean! @default(value: false)
+  discountApplied: String # e.g. "STUDENT_25", "SENIOR_30"
+  # Relationships
+  passenger: [Passenger!]!
+    @relationship(type: "PURCHASED", direction: IN, properties: "Purchased")
+  journey: [Journey!]! @relationship(type: "VALID_FOR", direction: OUT)
+  refund: [Refund!]! @relationship(type: "REFUNDED_AS", direction: OUT)
+}
+
+# ── Passenger ──────────────────────────────────────────────
+
+type Passenger @node {
+  id: ID! @id
+  firstName: String!
+  lastName: String!
+  email: String
+  phoneNumber: String
+  dateOfBirth: Date
+  loyaltyNumber: String
+  loyaltyPoints: Int @default(value: 0)
+  registeredSince: DateTime @timestamp(operations: [CREATE])
+  preferredClass: TicketClass @default(value: STANDARD)
+
+  tickets: [Ticket!]!
+    @relationship(type: "PURCHASED", direction: OUT, properties: "Purchased")
+  travelCard: [TravelCard!]! @relationship(type: "HOLDS", direction: OUT)
+}
+
+# ── TravelCard ──────────────────────────────────────────────
+
+type TravelCard @node {
+  id: ID! @id
+  cardNumber: String!
+  balance: Float!
+  currency: String! @default(value: "EUR")
+  expiresAt: DateTime!
+  isActive: Boolean! @default(value: true)
+
+  holder: [Passenger!]! @relationship(type: "HOLDS", direction: IN)
+}
+
+# ── Refund ──────────────────────────────────────────────────
+
+type Refund @node {
+  id: ID! @id
+  amount: Float!
+  currency: String! @default(value: "EUR")
+  reason: String
+  processedAt: DateTime
+  status: String! @default(value: "PENDING") # PENDING | COMPLETED | REJECTED
+  ticket: [Ticket!]! @relationship(type: "REFUNDED_AS", direction: IN)
+  processedBy: [StaffMember!]!
+    @relationship(type: "PROCESSED_BY", direction: OUT)
+}
+
+# ── StaffMember ──────────────────────────────────────────────
+
+type StaffMember @node {
+  id: ID! @id
+  employeeId: String!
+  firstName: String!
+  lastName: String!
+  role: String! # "driver" | "conductor" | "station_master" | "engineer"
+  licenseTypes: [String!]
+  hiredDate: Date
+  isActive: Boolean! @default(value: true)
+
+  baseStation: [Station!]! @relationship(type: "BASED_AT", direction: OUT)
+  journeys: [Journey!]!
+    @relationship(type: "WORKED", direction: OUT, properties: "Worked")
+  refunds: [Refund!]! @relationship(type: "PROCESSED_BY", direction: IN)
+  maintenanceLogs: [MaintenanceLog!]!
+    @relationship(type: "PERFORMED_BY", direction: IN)
+}
+
+# ── Operator ──────────────────────────────────────────────────
+
+type Operator @node {
+  id: ID! @id
+  name: String!
+  country: String!
+  licenseNumber: String
+  contactEmail: String
+  website: String
+
+  routes: [Route!]! @relationship(type: "OPERATED_BY", direction: IN)
+}
+
+# ── DailyPassengerLog ──────────────────────────────────────
+# Aggregated per-station daily statistics
+
+type DailyPassengerLog @node {
+  id: ID! @id
+  date: Date!
+  boardings: Int! @default(value: 0)
+  alightings: Int! @default(value: 0)
+  totalPassengers: Int! @default(value: 0)
+  peakHour: String # "HH:MM"
+  peakHourPassengers: Int
+  cancelledJourneys: Int @default(value: 0)
+  averageDelayMin: Float
+
+  station: [Station!]! @relationship(type: "LOGGED_AT", direction: OUT)
+}
+
+# ── TicketSalesSummary ─────────────────────────────────────
+# Daily aggregated ticket sales per route
+
+type TicketSalesSummary @node {
+  id: ID! @id
+  date: Date!
+  totalTickets: Int! @default(value: 0)
+  totalRevenue: Float! @default(value: 0.0)
+  currency: String! @default(value: "EUR")
+  standardSold: Int @default(value: 0)
+  firstClassSold: Int @default(value: 0)
+  businessSold: Int @default(value: 0)
+  sleeperSold: Int @default(value: 0)
+  cancellations: Int @default(value: 0)
+  refundsIssued: Float @default(value: 0.0)
+
+  route: [Route!]! @relationship(type: "SUMMARISES_ROUTE", direction: OUT)
+}
+
+# ── MaintenanceLog ─────────────────────────────────────────
+
+type MaintenanceLog @node {
+  id: ID! @id
+  type: String! # "scheduled" | "emergency" | "inspection"
+  description: String!
+  startedAt: DateTime!
+  completedAt: DateTime
+  costEur: Float
+  partsReplaced: [String!]
+  passed: Boolean
+
+  train: [Train!]! @relationship(type: "MAINTAINED_BY", direction: IN)
+  technician: [StaffMember!]!
+    @relationship(type: "PERFORMED_BY", direction: OUT)
+  depot: [Depot!]! @relationship(type: "CONDUCTED_AT", direction: OUT)
+}
+
+# ── Incident ───────────────────────────────────────────────
+
+type Incident @node {
+  id: ID! @id
+  reportedAt: DateTime! @timestamp(operations: [CREATE])
+  severity: String! # "low" | "medium" | "high" | "critical"
+  category: String! # "safety" | "delay" | "equipment" | "passenger"
+  description: String!
+  resolved: Boolean! @default(value: false)
+  resolvedAt: DateTime
+  actionsTaken: String
+
+  journey: [Journey!]! @relationship(type: "HAPPENED_ON", direction: OUT)
+  station: [Station!]! @relationship(type: "OCCURRED_AT", direction: OUT)
+  reportedBy: [StaffMember!]! @relationship(type: "REPORTED_BY", direction: OUT)
+}
+
+# ── TicketOffice ───────────────────────────────────────────
+
+type TicketOffice @node {
+  id: ID! @id
+  name: String!
+  openingHours: String
+  hasAtm: Boolean! @default(value: false)
+  languages: [String!]
+
+  station: [Station!]! @relationship(type: "LOCATED_IN", direction: OUT)
+  staff: [StaffMember!]! @relationship(type: "WORKS_AT", direction: IN)
+}

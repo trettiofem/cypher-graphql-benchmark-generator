@@ -2,12 +2,15 @@ import { ApolloServer } from "@apollo/server";
 import { startStandaloneServer } from "@apollo/server/standalone";
 import { Neo4jGraphQL } from "@neo4j/graphql";
 import neo4j from "neo4j-driver";
-import { generateRandomQuery, ProviderMap } from "ibm-graphql-query-generator";
-import { buildSchema, print } from "graphql";
+import { generateRandomQuery } from "ibm-graphql-query-generator";
+import { print as printGraphQL } from "graphql";
+import { GraphQLSchema } from "graphql";
+import GRAPHQL_SCHEMA from "./schema.graphql" with { type: "text" };
 
 const NBR_OF_QUERIES = 1;
-const DEPTH_PROBABILITY = 0.5;
-const BREADTH_PROBABILITY = 0.5;
+const DEPTH_PROBABILITY = 0.8;
+const BREADTH_PROBABILITY = 0.1;
+const MAX_DEPTH = 25;
 
 const NEO4J_URI = "neo4j://localhost:7687";
 const NEO4J_USERNAME = "neo4j";
@@ -15,40 +18,10 @@ const NEO4J_PASSWORD = "password";
 
 const APOLLO_PORT = 4067;
 
-const GRAPHQL_SCHEMA = `#graphql
-type Product @node {
-    productName: String
-    category: [Category!]! @relationship(type: "PART_OF", direction: OUT)
-}
-
-type Category @node {
-    categoryName: String
-    products: [Product!]! @relationship(type: "PART_OF", direction: IN)
-}
-`;
-
-const GRAPHQL_PROVIDER_MAP: ProviderMap = {
-  "*__*__name": () => {
-    const nameList = ["Alfred", "Barbara", "Charles", "Dorothy"];
-
-    return nameList[Math.floor(Math.random() * nameList.length)];
-  },
-  "*__*__companyName": () => {
-    const companyNameList = [
-      "All Systems Go",
-      "Business Brothers",
-      "Corporate Comglomerate Company",
-      "Data Defenders",
-    ];
-
-    return companyNameList[Math.floor(Math.random() * companyNameList.length)];
-  },
-};
-
 async function startServer(
   onQuery: (query: string, params: object, unknown: object) => void,
-): Promise<string> {
-  const logRegex = /RUN ([^]*) ({[^]*}) ({})/gm;
+): Promise<[string, GraphQLSchema, () => Promise<void>]> {
+  const logRegex = /RUN ([^]*) ({[^]*}) ({})/m;
 
   const driver = neo4j.driver(
     NEO4J_URI,
@@ -71,9 +44,10 @@ async function startServer(
   );
 
   const neoSchema = new Neo4jGraphQL({ typeDefs: GRAPHQL_SCHEMA, driver });
+  const schema = await neoSchema.getSchema();
 
   const server = new ApolloServer({
-    schema: await neoSchema.getSchema(),
+    schema,
   });
 
   const { url } = await startStandaloneServer(server, {
@@ -82,33 +56,58 @@ async function startServer(
   });
 
   console.log(`🚀 Server ready at ${url}`);
-  return url;
+  return [
+    url,
+    schema,
+    async () => {
+      await server.stop();
+      await driver.close();
+    },
+  ];
 }
 
 async function main() {
   const onQuery = (query: string, params: object, unknown: object) => {
-    console.log("---");
+    if (query.startsWith("CYPHER 5\nCALL dbms.components()")) return;
+
+    console.log("--- onQuery() ---");
     console.log(query);
-    console.log(params);
-    console.log(unknown);
+    console.log(JSON.stringify(params));
+    console.log(JSON.stringify(unknown) + "\n");
   };
 
-  // const url = await startServer(onQuery);
-
-  // Generate and send queries
-  const neoSchema = new Neo4jGraphQL({ typeDefs: GRAPHQL_SCHEMA });
-  const schema = await neoSchema.getSchema()
+  const [url, schema, shutdown] = await startServer(onQuery);
 
   for (let i = 0; i < NBR_OF_QUERIES; i++) {
     const { queryDocument, variableValues } = generateRandomQuery(schema, {
       depthProbability: DEPTH_PROBABILITY,
       breadthProbability: BREADTH_PROBABILITY,
-      providerMap: GRAPHQL_PROVIDER_MAP,
+      maxDepth: MAX_DEPTH,
+      providePlaceholders: true,
     });
 
-    console.log(print(queryDocument));
-    console.log(variableValues);
+    console.log(`--- Request ${i + 1} of ${NBR_OF_QUERIES} ---`);
+    console.log(printGraphQL(queryDocument));
+    console.log(JSON.stringify(variableValues) + "\n");
+
+    const res = await fetch(url, {
+      body: JSON.stringify({
+        operationName: "RandomQuery",
+        query: printGraphQL(queryDocument),
+        variables: variableValues,
+      }),
+      headers: {
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+    });
+
+    console.log(`--- Response from request ${i + 1} of ${NBR_OF_QUERIES} ---`);
+    const resBody = await res.text();
+    console.log(resBody + "\n");
   }
+
+  await shutdown();
 }
 
 if (import.meta.main) main();
