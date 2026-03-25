@@ -1,4 +1,4 @@
-# GraphQL Testing
+# Cypher GraphQL Benchmark Generator
 
 Generates Cypher queries using the [Neo4j GraphQL Library](https://neo4j.com/docs/graphql/current/) and [ibm-graphql-query-generator](https://github.com/IBM/graphql-query-generator).
 
