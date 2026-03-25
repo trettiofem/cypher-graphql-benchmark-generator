@@ -1,7 +1,7 @@
 services:
   neo4j:
     image: neo4j:latest
-    container_name: neo4j-server
+    container_name: neo4j-graphql-benchmark
     ports:
       - "7474:7474" # HTTP
       - "7687:7687" # Bolt (Binary protocol for drivers)

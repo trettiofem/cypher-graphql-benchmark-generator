@@ -38,7 +38,7 @@ const OUTPUT_FILE = "queries_{}.txt";
 
 ```bash
 # Setup Neo4j database
-sudo docker-compose up -d
+sudo docker compose up -d
 
 # Install dependencies
 deno install
