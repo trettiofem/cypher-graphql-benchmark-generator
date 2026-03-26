@@ -32,7 +32,7 @@ const STAGES = [
   },
   {
     name: "Large",
-    nbrOfQueries: 100,
+    nbrOfQueries: 300,
     depthProbability: 0.9,
     breadthProbability: 0.15,
     maxDepth: 30,

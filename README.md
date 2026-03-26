@@ -44,5 +44,5 @@ sudo docker compose up -d
 deno install
 
 # Generate queries
-deno run dev
+deno run generate
 ```

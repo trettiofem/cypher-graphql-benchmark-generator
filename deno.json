@@ -1,6 +1,6 @@
 {
   "tasks": {
-    "dev": "deno run -A --unstable-raw-imports main.ts"
+    "generate": "deno run -A --unstable-raw-imports main.ts"
   },
   "imports": {
     "@apollo/server": "npm:@apollo/server@^5.4.0",
