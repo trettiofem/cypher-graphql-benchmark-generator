@@ -31,7 +31,7 @@ const NEO4J_PASSWORD = "...";
 const APOLLO_PORT = 4067;
 
 // Output file, {} is replaced with the name of the stage
-const OUTPUT_FILE = "queries_{}.txt";
+const OUTPUT_FILE = "queries.json";
 ```
 
 ## Usage

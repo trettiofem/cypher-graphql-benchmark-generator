@@ -43,9 +43,10 @@ const NEO4J_URI = "neo4j://localhost:7687";
 const NEO4J_USERNAME = "neo4j";
 const NEO4J_PASSWORD = "password";
 const APOLLO_PORT = 4067;
-const OUTPUT_FILE = "queries_{}.txt";
+const OUTPUT_FILE = "queries.json";
 
-const queries: string[] = [];
+const queries: { [key in string]: string[] } = {};
+var currentStage = "";
 
 async function startServer(
   onQuery: (query: string) => void,
@@ -98,12 +99,15 @@ async function startServer(
 async function main() {
   const onQuery = (query: string) => {
     if (query.startsWith("CYPHER 5\nCALL dbms.components()")) return;
-    queries.push(query);
+    queries[currentStage].push(query);
   };
 
   const [url, schema, shutdown] = await startServer(onQuery);
 
   for (const stage of STAGES) {
+    currentStage = stage.name;
+    queries[currentStage] = [];
+
     for (let i = 0; i < stage.nbrOfQueries; i++) {
       try {
         console.log(`[${stage.name}] Query ${i + 1}/${stage.nbrOfQueries}`);
@@ -133,14 +137,10 @@ async function main() {
         i--;
       }
     }
-
-    const stageOutputFile = OUTPUT_FILE.replace("{}", stage.name.toLowerCase());
-
-    await Deno.writeTextFile(stageOutputFile, queries.join(";\n"));
-    console.log(`💾 Queries written to ${stageOutputFile}`);
-
-    queries.length = 0; // Clear the queries array for the next stage
   }
+
+  await Deno.writeTextFile(OUTPUT_FILE, JSON.stringify(queries, null, 2));
+  console.log(`💾 Queries written to ${OUTPUT_FILE}`);
 
   await shutdown();
 }
